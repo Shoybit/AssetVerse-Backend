@@ -13,6 +13,9 @@ connectDB().then(() => {
   // mount routes after DB is ready
   const authRoutes = require('./routes/auth.route.js');
   const testRoutes = require('./routes/test.route.js'); // your test route
+    // protected test routes
+  const protectedRoutes = require('./routes/protected.route');
+  app.use('/protected', protectedRoutes);
   app.use('/api', authRoutes);
   app.use('/', testRoutes);
 

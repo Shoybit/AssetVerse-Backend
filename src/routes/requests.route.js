@@ -278,5 +278,41 @@ router.put('/:id/approve', verifyToken, verifyHR, async (req, res) => {
 });
 
 
+/**
+ * PUT /requests/:id/reject
+ * HR-only: mark request as 'rejected'
+ */
+router.put('/:id/reject', verifyToken, verifyHR, async (req, res) => {
+  try {
+    const db = getDB();
+    const hr = req.user;
+    const reqId = req.params.id;
+    if (!ObjectId.isValid(reqId)) return res.status(400).json({ message: 'Invalid request id' });
+
+    const request = await db.collection('requests').findOne({ _id: new ObjectId(reqId) });
+    if (!request) return res.status(404).json({ message: 'Request not found' });
+    if (request.hrEmail !== hr.email) return res.status(403).json({ message: 'Not authorized' });
+    if (request.requestStatus !== 'pending') return res.status(400).json({ message: 'Only pending requests can be rejected' });
+
+    const now = new Date();
+    await db.collection('requests').updateOne(
+      { _id: request._id },
+      {
+        $set: {
+          requestStatus: 'rejected',
+          approvalDate: now,
+          processedBy: hr.email
+        }
+      }
+    );
+
+    return res.json({ message: 'Request rejected' });
+  } catch (err) {
+    console.error('Reject request error:', err);
+    return res.status(500).json({ message: 'Failed to reject request', error: err.message });
+  }
+});
+
+
 
 module.exports = router;

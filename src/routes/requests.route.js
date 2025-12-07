@@ -102,5 +102,47 @@ router.get('/my', verifyToken, async (req, res) => {
 });
 
 
+/**
+ * GET /requests
+ * HR-only: list requests for the HR (by hrEmail) with pagination and optional status filter
+ * Query params: page, limit, status (pending|approved|rejected)
+ */
+router.get('/', verifyToken, verifyHR, async (req, res) => {
+  try {
+    const db = getDB();
+    const hr = req.user;
+
+    const page = Math.max(1, parseInt(req.query.page || '1', 10));
+    const limit = Math.max(1, parseInt(req.query.limit || '10', 10));
+    const skip = (page - 1) * limit;
+    const status = req.query.status ? String(req.query.status) : null;
+
+    const filter = { hrEmail: hr.email };
+    if (status && ['pending', 'approved', 'rejected', 'returned'].includes(status)) {
+      filter.requestStatus = status;
+    }
+
+    const total = await db.collection('requests').countDocuments(filter);
+    const items = await db.collection('requests')
+      .find(filter)
+      .sort({ requestDate: -1 })
+      .skip(skip)
+      .limit(limit)
+      .toArray();
+
+    return res.json({
+      page,
+      limit,
+      total,
+      totalPages: Math.ceil(total / limit),
+      items,
+    });
+  } catch (err) {
+    console.error('Get HR requests error:', err);
+    return res.status(500).json({ message: 'Failed to fetch requests', error: err.message });
+  }
+});
+
+
 
 module.exports = router;

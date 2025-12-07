@@ -22,6 +22,9 @@ connectDB()
     const assetsRoutes = require("./routes/assets.route");
     app.use("/api/assets", assetsRoutes);
 
+    const requestsRoutes = require("./routes/requests.route");
+    app.use("/api/requests", requestsRoutes);
+
     const PORT = process.env.PORT || 5000;
     app.listen(PORT, () => {
       console.log(`AssetVerse Backend running on port ${PORT}`);

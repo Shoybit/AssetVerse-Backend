@@ -87,7 +87,112 @@ router.get('/company', verifyToken, verifyHR, async (req, res) => {
   }
 });
 
+/**
+ * DELETE /affiliations/:employeeEmail
+ * HR-only: remove employee affiliation for this HR.
+ * Transactional steps:
+ *  - verify affiliation exists and belongs to this HR
+ *  - find assignedAssets for employee under this HR with status 'assigned'
+ *  - for each assigned: mark assignedAssets.status='returned', set returnDate; increment assets.availableQuantity
+ *  - update related requests (approved -> returned)
+ *  - delete affiliation document
+ *  - decrement users.currentEmployees for HR
+ */
+router.delete('/:employeeEmail', verifyToken, verifyHR, async (req, res) => {
+  const db = getDB();
+  const client = getClient();
+  const hr = req.user;
+  const employeeEmail = String(req.params.employeeEmail || '').toLowerCase();
 
+  if (!employeeEmail) return res.status(400).json({ message: 'employeeEmail is required in params' });
+
+  const session = client.startSession();
+  try {
+    let resultSummary = null;
+
+    await session.withTransaction(async () => {
+      const affColl = db.collection('employeeAffiliations');
+      const assignedColl = db.collection('assignedAssets');
+      const assetsColl = db.collection('assets');
+      const requestsColl = db.collection('requests');
+      const usersColl = db.collection('users');
+
+      // 1) Find affiliation
+      const affiliation = await affColl.findOne(
+        { employeeEmail: employeeEmail, hrEmail: hr.email },
+        { session }
+      );
+      if (!affiliation) throw new Error('Affiliation not found for this employee under your company');
+
+      // 2) Find assigned assets for this employee under this HR with status 'assigned'
+      const assignedCursor = assignedColl.find(
+        { employeeEmail: employeeEmail, hrEmail: hr.email, status: 'assigned' },
+        { session }
+      );
+
+      const assignedList = await assignedCursor.toArray();
+
+      // 3) For each assigned asset: mark returned and increment asset.availableQuantity
+      const now = new Date();
+      for (const assigned of assignedList) {
+        // update assignedAssets status
+        await assignedColl.updateOne(
+          { _id: assigned._id },
+          { $set: { status: 'returned', returnDate: now } },
+          { session }
+        );
+
+        // increment asset availableQuantity if asset exists
+        if (assigned.assetId) {
+          await assetsColl.updateOne(
+            { _id: new ObjectId(assigned.assetId) },
+            { $inc: { availableQuantity: 1 } },
+            { session }
+          );
+
+          // mark related request as returned if there is one that was approved
+          await requestsColl.updateOne(
+            {
+              assetId: new ObjectId(assigned.assetId),
+              requesterEmail: employeeEmail,
+              requestStatus: 'approved'
+            },
+            { $set: { requestStatus: 'returned' } },
+            { session }
+          );
+        }
+      }
+
+      // 4) Delete affiliation
+      await affColl.deleteOne({ _id: affiliation._id }, { session });
+
+      // 5) Decrement hr's currentEmployees (but not below 0)
+      await usersColl.updateOne(
+        { email: hr.email },
+        { $inc: { currentEmployees: -1 } },
+        { session }
+      );
+
+      resultSummary = {
+        message: 'Employee removed and assignments returned',
+        removedAffiliation: affiliation,
+        returnedCount: assignedList.length
+      };
+    }, {
+      readPreference: 'primary',
+      readConcern: { level: 'local' },
+      writeConcern: { w: 'majority' }
+    });
+
+    await session.endSession();
+    return res.json(resultSummary);
+  } catch (err) {
+    try { await session.abortTransaction(); } catch(e){/*ignore*/ }
+    session.endSession();
+    console.error('Remove affiliation error:', err);
+    return res.status(400).json({ message: err.message || 'Failed to remove affiliation' });
+  }
+});
 
 
 module.exports = router;

@@ -104,6 +104,28 @@ router.get('/', async (req, res) => {
 });
 
 
+/**
+ * GET /assets/:id
+ * Public - fetch single asset by id
+ */
+router.get('/:id', async (req, res) => {
+  try {
+    const db = getDB();
+    const id = req.params.id;
+    if (!ObjectId.isValid(id)) return res.status(400).json({ message: 'Invalid asset id' });
+
+    const asset = await db.collection('assets').findOne({ _id: new ObjectId(id) });
+    if (!asset) return res.status(404).json({ message: 'Asset not found' });
+
+    return res.json({ asset });
+  } catch (err) {
+    console.error('Get asset by id error:', err);
+    return res.status(500).json({ message: 'Failed to fetch asset', error: err.message });
+  }
+});
+
+
+
 
 /**
  * DELETE /assets/:id

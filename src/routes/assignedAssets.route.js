@@ -43,5 +43,51 @@ router.get('/my', verifyToken, async (req, res) => {
 });
 
 
+/**
+ * GET /affiliations/company
+ * HR-only: list employees affiliated with this HR's company
+ * Query: page, limit, q (search by name/email)
+ */
+router.get('/company', verifyToken, verifyHR, async (req, res) => {
+  try {
+    const db = getDB();
+    const hr = req.user;
+
+    const page = Math.max(1, parseInt(req.query.page || '1', 10));
+    const limit = Math.max(1, parseInt(req.query.limit || '10', 10));
+    const skip = (page - 1) * limit;
+    const q = req.query.q ? String(req.query.q).trim() : null;
+
+    const filter = { hrEmail: hr.email };
+    if (q) {
+      filter.$or = [
+        { employeeName: { $regex: q, $options: 'i' } },
+        { employeeEmail: { $regex: q, $options: 'i' } }
+      ];
+    }
+
+    const total = await db.collection('employeeAffiliations').countDocuments(filter);
+    const items = await db.collection('employeeAffiliations')
+      .find(filter)
+      .sort({ affiliationDate: -1 })
+      .skip(skip)
+      .limit(limit)
+      .toArray();
+
+    return res.json({
+      page,
+      limit,
+      total,
+      totalPages: Math.ceil(total / limit),
+      items,
+    });
+  } catch (err) {
+    console.error('Get company affiliations error:', err);
+    return res.status(500).json({ message: 'Failed to fetch company affiliations', error: err.message });
+  }
+});
+
+
+
 
 module.exports = router;

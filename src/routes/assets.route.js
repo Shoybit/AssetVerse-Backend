@@ -58,6 +58,51 @@ router.post('/', verifyToken, verifyHR, async (req, res) => {
   }
 });
 
+/**
+ * GET /assets
+ * Public - paginated list with optional search & filter
+ * Query params:
+ *   page (default 1), limit (default 10), q (search productName), type (Returnable|Non-returnable), company (companyName)
+ */
+router.get('/', async (req, res) => {
+  try {
+    const db = getDB();
+    const page = Math.max(1, parseInt(req.query.page || '1', 10));
+    const limit = Math.max(1, parseInt(req.query.limit || '10', 10));
+    const skip = (page - 1) * limit;
+
+    const q = req.query.q ? String(req.query.q).trim() : null;
+    const type = req.query.type ? String(req.query.type) : null;
+    const company = req.query.company ? String(req.query.company).trim() : null;
+
+    const filter = {};
+    if (q) filter.productName = { $regex: q, $options: 'i' };
+    if (type && ['Returnable', 'Non-returnable'].includes(type)) filter.productType = type;
+    if (company) filter.companyName = company;
+
+    // Only return assets with availableQuantity > 0 by default? Spec shows listing all; keep all but allow client to filter.
+    const total = await db.collection('assets').countDocuments(filter);
+    const cursor = db.collection('assets')
+      .find(filter)
+      .sort({ dateAdded: -1 })
+      .skip(skip)
+      .limit(limit);
+
+    const items = await cursor.toArray();
+
+    return res.json({
+      page,
+      limit,
+      total,
+      totalPages: Math.ceil(total / limit),
+      items,
+    });
+  } catch (err) {
+    console.error('Get assets error:', err);
+    return res.status(500).json({ message: 'Failed to fetch assets', error: err.message });
+  }
+});
+
 
 
 /**

@@ -145,4 +145,138 @@ router.get('/', verifyToken, verifyHR, async (req, res) => {
 
 
 
+/**
+ * PUT /requests/:id/approve
+ * HR-only: Approve a pending request.
+ * Transactional:
+ *  - confirm request pending & belongs to this HR
+ *  - ensure asset availableQuantity > 0
+ *  - decrement asset.availableQuantity by 1
+ *  - create assignedAssets entry
+ *  - set request.requestStatus = 'approved', approvalDate, processedBy
+ *  - if employeeAffiliation doesn't exist, ensure HR.packageLimit allows new employee, then create affiliation and increment HR.currentEmployees
+ */
+router.put('/:id/approve', verifyToken, verifyHR, async (req, res) => {
+  const db = getDB();
+  const client = getClient();
+  const hr = req.user;
+  const reqId = req.params.id;
+
+  if (!ObjectId.isValid(reqId)) return res.status(400).json({ message: 'Invalid request id' });
+
+  const session = client.startSession();
+  try {
+    let resultDoc = null;
+    await session.withTransaction(async () => {
+      const requestsColl = db.collection('requests');
+      const assetsColl = db.collection('assets');
+      const assignedColl = db.collection('assignedAssets');
+      const affColl = db.collection('employeeAffiliations');
+      const usersColl = db.collection('users');
+
+      // 1) Fetch request (for update)
+      const request = await requestsColl.findOne({ _id: new ObjectId(reqId) }, { session });
+      if (!request) throw new Error('Request not found');
+      if (request.hrEmail !== hr.email) throw new Error('Not authorized for this request');
+      if (request.requestStatus !== 'pending') throw new Error('Request not pending');
+
+      // 2) Ensure asset has availableQuantity > 0 and decrement it
+      const asset = await assetsColl.findOne({ _id: new ObjectId(request.assetId) }, { session });
+      if (!asset) throw new Error('Associated asset not found');
+
+      if ((asset.availableQuantity || 0) <= 0) throw new Error('Asset not available');
+
+      const updateAssetRes = await assetsColl.updateOne(
+        { _id: asset._id, availableQuantity: { $gt: 0 } },
+        { $inc: { availableQuantity: -1 } },
+        { session }
+      );
+      if (updateAssetRes.matchedCount === 0) throw new Error('Failed to decrement asset (concurrent update?)');
+
+      // 3) Create assignedAssets entry
+      const assignedDoc = {
+        assetId: asset._id,
+        assetName: asset.productName,
+        assetImage: asset.productImage || null,
+        assetType: asset.productType,
+        employeeEmail: request.requesterEmail,
+        employeeName: request.requesterName,
+        hrEmail: hr.email,
+        companyName: request.companyName || null,
+        assignmentDate: new Date(),
+        returnDate: null,
+        status: 'assigned'
+      };
+      const assignedRes = await assignedColl.insertOne(assignedDoc, { session });
+
+      // 4) Update request to approved
+      const now = new Date();
+      await requestsColl.updateOne(
+        { _id: request._id },
+        {
+          $set: {
+            requestStatus: 'approved',
+            approvalDate: now,
+            processedBy: hr.email
+          }
+        },
+        { session }
+      );
+
+      // 5) Create affiliation if needed, and enforce packageLimit
+      const existingAff = await affColl.findOne(
+        { employeeEmail: request.requesterEmail, hrEmail: hr.email },
+        { session }
+      );
+
+      if (!existingAff) {
+        // check HR packageLimit
+        const hrUser = await usersColl.findOne({ email: hr.email }, { session });
+        if (!hrUser) throw new Error('HR user not found');
+        const packageLimit = Number(hrUser.packageLimit || 0);
+        const currentEmployees = Number(hrUser.currentEmployees || 0);
+
+        if (currentEmployees + 1 > packageLimit) {
+          throw new Error('Package employee limit reached; cannot create new affiliation. Please upgrade package.');
+        }
+
+        const affDoc = {
+          employeeEmail: request.requesterEmail,
+          employeeName: request.requesterName,
+          hrEmail: hr.email,
+          companyName: request.companyName || null,
+          companyLogo: request.companyLogo || null,
+          affiliationDate: new Date(),
+          status: 'active'
+        };
+        await affColl.insertOne(affDoc, { session });
+
+        // increment hr currentEmployees
+        await usersColl.updateOne(
+          { email: hr.email },
+          { $inc: { currentEmployees: 1 } },
+          { session }
+        );
+      }
+
+      // Return helpful result
+      resultDoc = { message: 'Request approved', assignedId: assignedRes.insertedId };
+    }, {
+      readPreference: 'primary',
+      readConcern: { level: 'local' },
+      writeConcern: { w: 'majority' }
+    });
+
+    await session.endSession();
+    return res.json(resultDoc);
+  } catch (err) {
+    await session.abortTransaction().catch(()=>{});
+    session.endSession();
+    console.error('Approve request error:', err);
+    return res.status(400).json({ message: err.message || 'Approval failed' });
+  }
+});
+
+
+
 module.exports = router;

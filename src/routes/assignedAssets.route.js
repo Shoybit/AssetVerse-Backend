@@ -42,5 +42,41 @@ router.get('/my', verifyToken, async (req, res) => {
   }
 });
 
+/**
+ * GET /assigned-assets/company
+ * HR-only: list assigned assets for this HR
+ * Query: page, limit
+ */
+router.get('/company', verifyToken, verifyHR, async (req, res) => {
+  try {
+    const db = getDB();
+    const hr = req.user;
+
+    const page = Math.max(1, parseInt(req.query.page || '1', 10));
+    const limit = Math.max(1, parseInt(req.query.limit || '10', 10));
+    const skip = (page - 1) * limit;
+
+    const filter = { hrEmail: hr.email };
+    const total = await db.collection('assignedAssets').countDocuments(filter);
+    const items = await db.collection('assignedAssets')
+      .find(filter)
+      .sort({ assignmentDate: -1 })
+      .skip(skip)
+      .limit(limit)
+      .toArray();
+
+    return res.json({
+      page,
+      limit,
+      total,
+      totalPages: Math.ceil(total / limit),
+      items,
+    });
+  } catch (err) {
+    console.error('Get company assigned assets error:', err);
+    return res.status(500).json({ message: 'Failed to fetch assigned assets', error: err.message });
+  }
+});
+
 
 module.exports = router;

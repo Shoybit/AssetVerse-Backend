@@ -125,6 +125,69 @@ router.get('/:id', async (req, res) => {
 });
 
 
+/**
+ * PUT /assets/:id
+ * HR only - update certain fields. Note: adjusting productQuantity must adjust availableQuantity accordingly.
+ */
+router.put('/:id', verifyToken, verifyHR, async (req, res) => {
+  try {
+    const db = getDB();
+    const id = req.params.id;
+    if (!ObjectId.isValid(id)) return res.status(400).json({ message: 'Invalid asset id' });
+
+    const hr = req.user;
+
+    const existing = await db.collection('assets').findOne({ _id: new ObjectId(id) });
+    if (!existing) return res.status(404).json({ message: 'Asset not found' });
+
+    // Only the HR who created the asset (same hrEmail) should update it
+    if (existing.hrEmail !== hr.email) {
+      return res.status(403).json({ message: 'Not authorized to update this asset' });
+    }
+
+    const updates = {};
+    const allowed = ['productName', 'productImage', 'productType', 'productQuantity', 'companyName'];
+
+    for (const key of allowed) {
+      if (key in req.body) updates[key] = req.body[key];
+    }
+
+    // Validate productType if provided
+    if (updates.productType && !['Returnable', 'Non-returnable'].includes(updates.productType)) {
+      return res.status(400).json({ message: 'productType must be "Returnable" or "Non-returnable"' });
+    }
+
+    // If productQuantity changes, adjust availableQuantity by the difference
+    if (updates.productQuantity !== undefined) {
+      const newQty = Number(updates.productQuantity);
+      if (!Number.isInteger(newQty) || newQty < 0) {
+        return res.status(400).json({ message: 'productQuantity must be a non-negative integer' });
+      }
+      const diff = newQty - existing.productQuantity; // can be positive or negative
+      updates.productQuantity = newQty;
+      updates.availableQuantity = Math.max(0, (existing.availableQuantity || 0) + diff);
+      // Note: if diff negative and assigned > newQty then availableQuantity might be 0. Business decision: we do not auto-return assigned items.
+    }
+
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({ message: 'No valid fields provided for update' });
+    }
+
+    updates.updatedAt = new Date();
+
+    const result = await db.collection('assets').findOneAndUpdate(
+      { _id: new ObjectId(id) },
+      { $set: updates },
+      { returnDocument: 'after' }
+    );
+
+    return res.json({ message: 'Asset updated', asset: result.value });
+  } catch (err) {
+    console.error('Update asset error:', err);
+    return res.status(500).json({ message: 'Failed to update asset', error: err.message });
+  }
+});
+
 
 
 /**

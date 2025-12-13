@@ -8,6 +8,8 @@ const { getDB } = require('../config/db');
  * Public: return the packages available (from DB). If you prefer static packages, seed them in DB.
  */
 router.get('/', async (req, res) => {
+    console.log('🔥 /api/packages HIT');   
+
   try {
     const db = getDB();
     const packages = await db.collection('packages').find({}).toArray();

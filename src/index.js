@@ -3,74 +3,65 @@ const express = require("express");
 const cors = require("cors");
 const { connectDB } = require("./config/db");
 
-const app = express();
-
-// ---------------------------------------------
-// IMPORT STRIPE WEBHOOK HANDLER BEFORE USING IT
-// ---------------------------------------------
 const {
   paymentsRouter,
   stripeWebhookHandler,
 } = require("./routes/payments.route");
 
-// ---------------------------------------------
-// STRIPE WEBHOOK ROUTE MUST USE express.raw()
-// MUST BE DECLARED BEFORE express.json()
-// ---------------------------------------------
+const app = express();
+
+/* -------------------------------------------------
+   STRIPE WEBHOOK (MUST BE FIRST, RAW BODY)
+------------------------------------------------- */
 app.post(
   "/api/payments/webhook",
   express.raw({ type: "application/json" }),
   stripeWebhookHandler
 );
 
-// Normal middleware AFTER webhook
+/* -------------------------------------------------
+   NORMAL MIDDLEWARES (AFTER WEBHOOK)
+------------------------------------------------- */
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: "15mb" }));
+app.use(express.urlencoded({ extended: true, limit: "15mb" }));
 
-// ---------------------------------------------
-// CONNECT DB AND THEN MOUNT ROUTES
-// ---------------------------------------------
+/* -------------------------------------------------
+   CONNECT DATABASE & ROUTES
+------------------------------------------------- */
 connectDB()
   .then(() => {
-    // ROUTES
+    // Auth
+    app.use("/api", require("./routes/auth.route"));
 
-    // Auth Routes
-    const authRoutes = require("./routes/auth.route.js");
-    app.use("/api", authRoutes);
+    // Test
+    app.use("/", require("./routes/test.route"));
 
-    // Test route
-    const testRoutes = require("./routes/test.route.js");
-    app.use("/", testRoutes);
+    // Protected
+    app.use("/api/protected", require("./routes/protected.route"));
 
-    // Protected route
-    const protectedRoutes = require("./routes/protected.route.js");
-    app.use("/api/protected", protectedRoutes);
+    // Assets
+    app.use("/api/assets", require("./routes/assets.route"));
 
-    // Assets routes
-    const assetsRoutes = require("./routes/assets.route");
-    app.use("/api/assets", assetsRoutes);
-
-    // Requests routes
-    const requestsRoutes = require("./routes/requests.route");
-    app.use("/api/requests", requestsRoutes);
+    // Requests
+    app.use("/api/requests", require("./routes/requests.route"));
 
     // Assigned assets
-    const assignedAssetsRoutes = require("./routes/assignedAssets.route");
-    app.use("/api/assigned-assets", assignedAssetsRoutes);
+    app.use("/api/assigned-assets", require("./routes/assignedAssets.route"));
 
-    // Affiliations routes
-    const affiliationsRoutes = require("./routes/affiliations.route");
-    app.use("/api/affiliations", affiliationsRoutes);
+    // Affiliations
+    app.use("/api/affiliations", require("./routes/affiliations.route"));
 
-    // Packages routes
-    const packagesRoutes = require("./routes/packages.route");
-    app.use("/api/packages", packagesRoutes);
+    // Packages
+    app.use("/api/packages", require("./routes/packages.route"));
 
-    // Payments (checkout, history, simulate)
+    // Payments
     app.use("/api/payments", paymentsRouter);
 
-    // START SERVER
-    const PORT = process.env.PORT || 5000;
+    // Users (profile update)
+    app.use("/api", require("./routes/users.route"));
+
+    const PORT = process.env.PORT || 3000;
     app.listen(PORT, () => {
       console.log(`AssetVerse Backend running on port ${PORT}`);
     });

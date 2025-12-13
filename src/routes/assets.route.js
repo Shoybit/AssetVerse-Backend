@@ -1,4 +1,3 @@
-// src/routes/assets.route.js
 const express = require('express');
 const { ObjectId } = require('mongodb');
 const router = express.Router();
@@ -13,7 +12,7 @@ const verifyHR = require('../middlewares/verifyHR');
 router.post('/', verifyToken, verifyHR, async (req, res) => {
   try {
     const db = getDB();
-    const hr = req.user; // verifyToken 
+    const hr = req.user; 
 
     const {
       productName,

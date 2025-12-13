@@ -74,12 +74,59 @@ router.get('/company', verifyToken, verifyHR, async (req, res) => {
       .limit(limit)
       .toArray();
 
+    // If no items, return early with empty list
+    if (!items || items.length === 0) {
+      return res.json({
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+        items: []
+      });
+    }
+
+    // Build emails list for aggregation (normalize to lower-case for stable matching)
+    const employeeEmails = items
+      .map(it => (it.employeeEmail || '').toString().toLowerCase())
+      .filter(Boolean);
+
+    // Aggregate assignedAssets collection to get counts per employeeEmail (for this HR)
+    const assignedCounts = await db.collection('assignedAssets').aggregate([
+      {
+        $match: {
+          hrEmail: hr.email,
+          status: 'assigned',
+          employeeEmail: { $in: employeeEmails }
+        }
+      },
+      {
+        $group: {
+          _id: { $toLower: '$employeeEmail' },
+          count: { $sum: 1 }
+        }
+      }
+    ]).toArray();
+
+    const countsMap = (assignedCounts || []).reduce((map, doc) => {
+      map[String(doc._id)] = doc.count || 0;
+      return map;
+    }, {});
+
+    // Attach assetsCount to each affiliation item (fallback 0)
+    const normalized = items.map(it => {
+      const emailKey = (it.employeeEmail || '').toString().toLowerCase();
+      return {
+        ...it,
+        assetsCount: countsMap[emailKey] || 0
+      };
+    });
+
     return res.json({
       page,
       limit,
       total,
       totalPages: Math.ceil(total / limit),
-      items,
+      items: normalized,
     });
   } catch (err) {
     console.error('Get company affiliations error:', err);
@@ -87,17 +134,8 @@ router.get('/company', verifyToken, verifyHR, async (req, res) => {
   }
 });
 
-/**
- * DELETE /affiliations/:employeeEmail
- * HR-only: remove employee affiliation for this HR.
- * Transactional steps:
- *  - verify affiliation exists and belongs to this HR
- *  - find assignedAssets for employee under this HR with status 'assigned'
- *  - for each assigned: mark assignedAssets.status='returned', set returnDate; increment assets.availableQuantity
- *  - update related requests (approved -> returned)
- *  - delete affiliation document
- *  - decrement users.currentEmployees for HR
- */
+
+ 
 router.delete('/:employeeEmail', verifyToken, verifyHR, async (req, res) => {
   const db = getDB();
   const client = getClient();
